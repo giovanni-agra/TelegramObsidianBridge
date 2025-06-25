@@ -1,0 +1,6 @@
+{
+    "telegram_bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+    "obsidian_vault_path": "/path/to/your/obsidian/vault",
+    "whisper_model_path": "./models/ggml-base.en.bin",
+    "whisper_exe_path": "./whisper.cpp/build/bin/Release/whisper-cli.exe"
+}

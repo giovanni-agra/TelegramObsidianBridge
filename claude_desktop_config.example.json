@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "telegram-bridge": {
+      "command": "/path/to/your/TelegramObsidianBridge/venv/Scripts/python.exe",
+      "args": [
+        "mcp_server/telegram_mcp.py"
+      ],
+      "cwd": "/path/to/your/TelegramObsidianBridge",
+      "env": {
+        "PYTHONPATH": "/path/to/your/TelegramObsidianBridge"
+      }
+    }
+  }
+}

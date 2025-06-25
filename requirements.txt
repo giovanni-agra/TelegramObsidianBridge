@@ -1,0 +1,15 @@
+# Telegram Bot functionality
+python-telegram-bot>=21.0
+
+# File system monitoring
+watchdog>=3.0.0
+
+# MCP (Model Context Protocol) server
+fastmcp>=0.1.0
+
+# Additional dependencies that might be needed
+# Uncomment if you encounter import errors:
+# requests>=2.31.0
+# aiohttp>=3.8.0
+
+# Note: Audio conversion is handled by FFmpeg (install separately)
