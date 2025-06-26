@@ -48,6 +48,146 @@ class TelegramCaptureBot:
                 "- Any text notes 📝"
             )
 
+    async def summary(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Get daily summary of captured content"""
+        try:
+            if not update.message:
+                return
+
+            today_stats = {"todos": 0, "ideas": 0, "voice": 0, "notes": 0, "links": 0}
+
+            # Count files from today
+            today_str = datetime.now().strftime("%Y%m%d")
+
+            # Check both incoming and processed directories
+            for directory in ["incoming", "processed"]:
+                dir_path = self.content_dir / directory
+                if not dir_path.exists():
+                    continue
+
+                for file_path in dir_path.glob(f"*{today_str}*.json"):
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+
+                        content_type = data.get("type", "note")
+                        if content_type == "todo":
+                            today_stats["todos"] += 1
+                        elif content_type == "idea":
+                            today_stats["ideas"] += 1
+                        elif content_type in ["voice", "voice_transcription"]:
+                            today_stats["voice"] += 1
+                        elif content_type == "link":
+                            today_stats["links"] += 1
+                        else:
+                            today_stats["notes"] += 1
+
+                    except Exception as e:
+                        logger.error(f"Error reading file {file_path}: {e}")
+
+            total_items = sum(today_stats.values())
+
+            summary_text = f"""📊 **Today's Captures** ({datetime.now().strftime("%Y-%m-%d")}):
+
+• **TODOs**: {today_stats["todos"]}
+• **Ideas**: {today_stats["ideas"]} 💡
+• **Voice Notes**: {today_stats["voice"]} 🎤
+• **Quick Notes**: {today_stats["notes"]} 📝
+• **Links**: {today_stats["links"]} 🔗
+
+**Total**: {total_items} items captured
+
+Use Claude Desktop to process pending items!"""
+
+            await update.message.reply_text(summary_text, parse_mode="Markdown")
+            user_id = update.effective_user.id if update.effective_user else "unknown"
+            logger.info(f"Summary requested by user {user_id}: {total_items} items")
+
+        except Exception as e:
+            logger.error(f"Error in summary command: {e}")
+            if update.message:
+                await update.message.reply_text(
+                    "❌ Error generating summary. Check logs for details."
+                )
+
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show help information"""
+        help_text = """🤖 **Personal Assistant Bot Commands**
+
+**Basic Commands:**
+/start - Show welcome message
+/help - Show this help
+/summary - Today's capture statistics
+/status - System status check
+
+**Content Types:**
+• **Voice messages** 🎤 - Auto-transcribed
+• **TODO:** - Task management
+• **IDEA:** or 💡 - Idea capture  
+• **Links** 🔗 - URL bookmarking
+• **Text notes** 📝 - General notes
+
+**Tips:**
+• Use Claude Desktop to process captures
+• Check your Obsidian vault under "Telegram Captures"
+• Voice messages are transcribed automatically
+
+**Support:**
+Send /status if something isn't working"""
+
+        if update.message:
+            await update.message.reply_text(help_text, parse_mode="Markdown")
+
+    async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Check system status"""
+        try:
+            from datetime import timedelta
+
+            status_info = []
+
+            # Check directories
+            dirs_ok = all(
+                [
+                    (self.content_dir / "incoming").exists(),
+                    (self.content_dir / "processed").exists(),
+                    (self.content_dir / "voices").exists(),
+                ]
+            )
+            status_info.append(f"📁 Directories: {'✅' if dirs_ok else '❌'}")
+
+            # Check pending files
+            incoming_count = len(list((self.content_dir / "incoming").glob("*.json")))
+            processed_count = len(list((self.content_dir / "processed").glob("*.json")))
+            status_info.append(
+                f"📄 Pending: {incoming_count} | Processed: {processed_count}"
+            )
+
+            # Check recent activity
+            recent_files = 0
+            cutoff = datetime.now() - timedelta(hours=1)
+            for dir_name in ["incoming", "processed"]:
+                dir_path = self.content_dir / dir_name
+                if dir_path.exists():
+                    for file_path in dir_path.glob("*.json"):
+                        if file_path.stat().st_mtime > cutoff.timestamp():
+                            recent_files += 1
+
+            status_info.append(f"🕐 Last hour: {recent_files} files")
+            status_info.append("🤖 Bot status: ✅ Running")
+            status_info.append(
+                f"⏰ Current time: {datetime.now().strftime('%H:%M:%S')}"
+            )
+
+            status_text = "📊 **System Status**\n\n" + "\n".join(status_info)
+
+            if update.message:
+                await update.message.reply_text(status_text, parse_mode="Markdown")
+
+        except Exception as e:
+            logger.error(f"Error in status command: {e}")
+            if update.message:
+                await update.message.reply_text("❌ Error checking status. Check logs.")
+
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle text messages"""
         try:
@@ -167,6 +307,9 @@ class TelegramCaptureBot:
 
                 # Add handlers
                 application.add_handler(CommandHandler("start", self.start))
+                application.add_handler(CommandHandler("summary", self.summary))
+                application.add_handler(CommandHandler("help", self.help_command))
+                application.add_handler(CommandHandler("status", self.status))
                 application.add_handler(
                     MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
                 )

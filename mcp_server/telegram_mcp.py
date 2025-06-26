@@ -2,7 +2,7 @@ from fastmcp import FastMCP
 import json
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Initialize MCP server
 mcp = FastMCP("telegram-obsidian-bridge")
@@ -23,87 +23,35 @@ logger.info(f"Incoming directory: {INCOMING_DIR.resolve()}")
 logger.info(f"Processed directory: {PROCESSED_DIR.resolve()}")
 
 
-@mcp.tool()
-async def get_pending_content(content_type: str = "all") -> str:
-    """Get pending content form Telegram for processing
-
-    Args:
-        content_type: Type of content to retrieve (all, todo, voice, idea, note, link)
-    """
-    try:
-        pending_files = []
-
-        # Check both incoming and processed directories
-        for directory in [INCOMING_DIR, PROCESSED_DIR]:
-            if not directory.exists():
-                continue
-
-            for file_path in directory.glob("*.json"):
-                with open(file_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-
-                if content_type == "all" or data.get("type") == content_type:
-                    data["file_path"] = str(file_path)
-                    pending_files.append(data)
-
-        # Sort by timestamp
-        pending_files.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-
-        return json.dumps(
-            {
-                "count": len(pending_files),
-                "items": pending_files[:10],  # Limit to recent 10
-            },
-            indent=2,
-        )
-
-    except Exception as e:
-        logger.error(f"Error getting pending content: {e}")
-        return json.dumps({"error": str(e)})
-
-
-def move_processed_file(source_file_path: str):
+def move_processed_file(source_path):
     """Move a processed file to the archive directory"""
     try:
-        source_path = Path(source_file_path)
-        if not source_path.exists():
-            logger.warning(f"Source file not found: {source_path}")
-            return False
+        source = Path(source_path)
+        if not source.exists():
+            logger.warning(f"Source file not found: {source}")
+            return
 
-        # Create archive directory
         archive_dir = CONTENT_DIR / "archive"
         archive_dir.mkdir(parents=True, exist_ok=True)
 
-        # Move file to archive with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        archive_filename = f"{source_path.stem}_{timestamp}{source_path.suffix}"
-        archive_path = archive_dir / archive_filename
+        dest = archive_dir / source.name
+        counter = 1
+        while dest.exists():
+            stem = source.stem
+            suffix = source.suffix
+            dest = archive_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
 
-        # Move the file
-        source_path.rename(archive_path)
-        logger.info(f"Moved processed file: {source_path.name} → {archive_path.name}")
-        return True
-
+        source.rename(dest)
+        logger.info(f"Moved {source} to {dest}")
     except Exception as e:
-        logger.error(f"Failed to move file {source_file_path}: {e}")
-        return False
+        logger.error(f"Failed to move file {source_path}: {e}")
 
 
-@mcp.tool()
-async def process_for_obsidian(
-    content: str,
-    content_type: str,
-    additional_context: str = "",
-    source_file_path: str = "",
+def format_content_for_obsidian(
+    content: str, content_type: str, additional_context: str = ""
 ) -> str:
-    """Process content and format it for Obsidian
-
-    Args:
-        content: The content to process
-        content_type: Type of content (todo, voice_transcription, idea, note, link)
-        additional_context: Any additional context or Claude's analysis
-        source_file_path: Path to the original file (will be moved to archive)
-    """
+    """Format content for Obsidian - shared function used by both individual and batch processing"""
     timestamp = datetime.now()
 
     # Create appropriate formatting based on type
@@ -196,7 +144,14 @@ tags: [telegram, quick-capture]
 
 ---
 *Captured from Telegram*
-"""  # Save to ready-for-obsidian directory
+"""
+
+    return formatted
+
+
+def save_formatted_content(formatted_content: str, content_type: str) -> str:
+    """Save formatted content to ready-for-obsidian directory and return the file path"""
+    timestamp = datetime.now()
     ready_dir = CONTENT_DIR / "ready_for_obsidian"
 
     logger.info(f"About to create directory: {ready_dir}")
@@ -210,18 +165,83 @@ tags: [telegram, quick-capture]
         logger.info(f"Ready directory ensured: {ready_dir.resolve()}")
     except Exception as e:
         logger.error(f"Failed to create ready directory: {e}")
-        return json.dumps({"error": f"Failed to create directory: {e}"})
+        raise Exception(f"Failed to create directory: {e}")
 
     filename = f"{content_type}_{timestamp.strftime('%Y%m%d_%H%M%S')}.md"
     output_path = ready_dir / filename
 
     try:
         with open(output_path, "w", encoding="utf-8") as f:
-            f.write(formatted)
+            f.write(formatted_content)
         logger.info(f"File written successfully: {output_path.resolve()}")
+        return str(output_path)
     except Exception as e:
         logger.error(f"Failed to write file: {e}")
-        return json.dumps({"error": f"Failed to write file: {e}"})
+        raise Exception(f"Failed to write file: {e}")
+
+
+@mcp.tool()
+async def get_pending_content(content_type: str = "all") -> str:
+    """Get pending content form Telegram for processing
+
+    Args:
+        content_type: Type of content to retrieve (all, todo, voice, idea, note, link)
+    """
+    try:
+        pending_files = []
+
+        # Check both incoming and processed directories
+        for directory in [INCOMING_DIR, PROCESSED_DIR]:
+            if not directory.exists():
+                continue
+
+            for file_path in directory.glob("*.json"):
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+                if content_type == "all" or data.get("type") == content_type:
+                    data["file_path"] = str(file_path)
+                    pending_files.append(data)
+
+        # Sort by timestamp
+        pending_files.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+        return json.dumps(
+            {
+                "count": len(pending_files),
+                "items": pending_files[:10],  # Limit to recent 10
+            },
+            indent=2,
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting pending content: {e}")
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+async def process_for_obsidian(
+    content: str,
+    content_type: str,
+    additional_context: str = "",
+    source_file_path: str = "",
+) -> str:
+    """Process SINGLE item of content and format it for Obsidian
+
+    Use this for processing individual items or when you have specific content to process.
+    For multiple pending files, prefer using process_all_pending() for better efficiency.
+
+    Args:
+        content: The content to process
+        content_type: Type of content (todo, voice_transcription, idea, note, link)
+        additional_context: Any additional context or Claude's analysis
+        source_file_path: Path to the original file (will be moved to archive if provided)
+    """
+    # Create the formatted content using the shared function
+    formatted = format_content_for_obsidian(content, content_type, additional_context)
+
+    # Save the formatted content to the ready-for-obsidian directory
+    output_path = save_formatted_content(formatted, content_type)
 
     # Move the processed file to archive if a source path is provided
     if source_file_path:
@@ -277,6 +297,184 @@ async def get_daily_summary() -> str:
     )
 
     return json.dumps(summary, indent=2)
+
+
+@mcp.tool()
+async def process_all_pending(auto_archive: bool = True) -> str:
+    """BATCH PROCESSING: Process ALL pending content at once for maximum efficiency
+
+    This is the PREFERRED method for processing multiple files. Use this instead of
+    calling process_for_obsidian multiple times. Benefits:
+    - Processes all files in one operation
+    - Consistent formatting and timestamps
+    - Automatic error handling and reporting
+    - Bulk archiving of processed files
+    - Comprehensive summary of results
+
+    Args:
+        auto_archive: Whether to automatically move processed files to archive (default: True)
+    """
+    try:
+        processed_items = []
+        error_items = []
+
+        # Get all pending content
+        for directory in [INCOMING_DIR, PROCESSED_DIR]:
+            if not directory.exists():
+                continue
+
+            for file_path in directory.glob("*.json"):
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+
+                        content_type = data.get("type", "note")
+                        content = data.get("content", "")
+                        if content_type == "voice_transcription":
+                            content = data.get("transcription", "")
+
+                        # Generate smart context based on content type
+                        if content_type == "todo":
+                            context = "This is a task that needs to be organized and prioritized."
+                        elif content_type == "idea":
+                            context = "This is a creative idea that should be evaluated and potentially developed."
+                        elif content_type == "voice_transcription":
+                            context = "This was captured as a voice message and has been transcribed."
+                        else:
+                            context = "This is a quick capture that may need further categorization."
+
+                        # Use the shared formatting functions
+                        try:
+                            formatted_content = format_content_for_obsidian(
+                                content, content_type, context
+                            )
+                            output_file = save_formatted_content(
+                                formatted_content, content_type
+                            )
+
+                            # Move the processed file to archive if requested
+                            if auto_archive and file_path.exists():
+                                move_processed_file(str(file_path))
+
+                            processed_items.append(
+                                {
+                                    "file": file_path.name,
+                                    "type": content_type,
+                                    "status": "success",
+                                    "output_file": output_file,
+                                }
+                            )
+
+                        except Exception as e:
+                            logger.error(f"Failed to process {file_path.name}: {e}")
+                            processed_items.append(
+                                {
+                                    "file": file_path.name,
+                                    "type": content_type,
+                                    "status": "error",
+                                    "error": str(e),
+                                }
+                            )
+
+                except Exception as e:
+                    error_items.append({"file": file_path.name, "error": str(e)})
+                    logger.error(f"Failed to process {file_path.name}: {e}")
+
+        return json.dumps(
+            {
+                "operation": "batch_processing",
+                "processed": len(processed_items),
+                "errors": len(error_items),
+                "total_files_found": len(processed_items) + len(error_items),
+                "summary": f"Batch processed {len(processed_items)} files successfully"
+                + (f" with {len(error_items)} errors" if error_items else ""),
+                "items": processed_items,
+                "error_details": error_items if error_items else None,
+                "batch_advantages": [
+                    "All files processed in single operation",
+                    "Consistent formatting across all items",
+                    "Automatic archiving if enabled",
+                    "Comprehensive error reporting",
+                ],
+            },
+            indent=2,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in batch processing: {e}")
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+async def analyze_content_patterns() -> str:
+    """Analyze patterns in captured content for insights"""
+    try:
+        analysis = {
+            "total_files": 0,
+            "by_type": {},
+            "by_hour": {},
+            "recent_trends": {},
+            "suggestions": [],
+        }
+
+        # Analyze all content from last 7 days
+        cutoff = datetime.now() - timedelta(days=7)
+
+        for directory in [INCOMING_DIR, PROCESSED_DIR, CONTENT_DIR / "archive"]:
+            if not directory.exists():
+                continue
+
+            for file_path in directory.rglob("*.json"):
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+
+                    timestamp_str = data.get("timestamp", "")
+                    if timestamp_str:
+                        time_stamp = datetime.fromisoformat(
+                            timestamp_str.replace("Z", "+00:00")
+                        )
+                        if time_stamp < cutoff:
+                            continue
+
+                        # Count by hour (moved inside the timestamp_str check)
+                        hour = time_stamp.hour
+                        analysis["by_hour"][hour] = analysis["by_hour"].get(hour, 0) + 1
+
+                    analysis["total_files"] += 1
+
+                    # Count by type
+                    content_type = data.get("type", "unknown")
+                    analysis["by_type"][content_type] = (
+                        analysis["by_type"].get(content_type, 0) + 1
+                    )
+
+                except Exception as e:
+                    logger.error(f"Error analyzing {file_path}: {e}")
+
+        # Generate suggestions
+        if analysis["by_type"].get("todo", 0) > 10:
+            analysis["suggestions"].append(
+                "Consider setting up automated TODO prioritization"
+            )
+
+        if analysis["by_type"].get("voice_transcription", 0) > 5:
+            analysis["suggestions"].append(
+                "You're using voice capture frequently - great for quick thoughts!"
+            )
+
+        # Finde peak hours
+        if analysis["by_hour"]:
+            peak_hour = max(analysis["by_hour"], key=analysis["by_hour"].get)
+            analysis["suggestions"].append(
+                f"Your most active capture time is {peak_hour:02d}:00"
+            )
+
+        return json.dumps(analysis, indent=2)
+
+    except Exception as e:
+        logger.error(f"Error analyzing patterns: {e}")
+        return json.dumps({"error": str(e)})
 
 
 if __name__ == "__main__":
